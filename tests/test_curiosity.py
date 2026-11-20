@@ -1,6 +1,7 @@
 """Plan section 6's six tests (Lyra)."""
 import json
 import re
+from datetime import timedelta
 
 import pytest
 
@@ -185,7 +186,7 @@ def test_curiosity_6_adoption_needs_curious_adopt(make_agent, cli, tmp_path, cap
 
 # --- Round 3 (CC): tests of curiosity's existing guards and settings, added from the Agent Army's and the
 #     r2 verifier's surviving mutants. They pin behaviour the code already has; Lyra to review.
-#     W16 (a dropped question never expires) is Lyra's own test, so it isn't here.
+#     W16 (a dropped question never expires) is Lyra's own test: the last one in this file.
 
 def finished_session(store, agent_text="I am not sure why it fails."):
     from conftest import add_session
@@ -266,3 +267,59 @@ def test_curiosity_11_the_hash_embedder_can_also_skip_a_different_question():
                 ("Why does the model converge?", "Why does the model not converge?"): .916}
     for (a, b), similarity in measured.items():
         assert round(cosine(*HashEmbedder().embed([a, b])), 3) == similarity, (a, b)
+
+
+# --- W16 (Lyra): a dropped question never expires out of the dedupe pool ----------------------------------
+#     Drop is your "no", and it holds for good. Expiry (the full queue) takes OPEN questions only, so nothing
+#     ages a dropped one out: not time, not more sessions, not the queue overflowing, not more drops, not
+#     deleting another session. Raised again, nearly or exactly, it is skipped as the dropped one's twin.
+
+ANIMALS = ("zebra falcon otter lynx heron bison gecko walrus ibis koala moose newt okapi panda quail raven skunk "
+           "tapir viper wombat yak badger beaver camel dingo eagle ferret gibbon hyena jackal lemur marmot narwhal "
+           "ocelot parrot rabbit salmon toucan urchin vulture weasel alpaca beetle cobra donkey emu finch goose "
+           "hornet iguana jaguar kestrel llama mole oyster pelican puffin seal squid tortoise").split()
+VERBS = ("sleep migrate whistle dig glow molt swim climb hum sneeze wander blink shiver drift nest sing hide graze "
+         "coil burrow roam bark chirp croak dance float gather howl jump kneel leap mutter nibble orbit pace quiver "
+         "rattle scurry tremble unfurl vanish wobble yawn bask cling dive flutter glide hover itch jitter knock "
+         "linger mumble nod ooze purr rustle snore twitch").split()
+
+
+def test_curiosity_w16_a_dropped_question_never_expires_out_of_the_dedupe_pool(make_agent):
+    spike = "Why does the training loss spike at step 400?"
+    again = ["Why does the training loss spike around step 400?", spike]     # 0.916 similar (test 4b), and exact
+    others = [f"Why does the {a} {v}?" for a, v in zip(ANIMALS, VERBS)]     # 60, no two 0.85 similar
+    asked = [[spike]] + [others[i:i + 2] for i in range(0, 60, 2)] + [again]
+
+    def reader(prompt):
+        turn = max(agent_turns(prompt))
+        return json.dumps({"questions": [{"text": t, "quote": "not sure", "turn": turn} for t in asked.pop(0)]})
+    agent = make_agent(fn=scripted([say("I'm not sure.")] * len(asked), reader))
+    store = agent.store
+    start = store.clock()
+
+    def session(message):
+        agent.handle(message)
+        queued = agent.end_session()
+        store.clock.advance(14 * 24 * 60)                  # a fortnight between sessions
+        return queued
+
+    (spike_id,) = session("The loss spiked.")
+    dropped = curiosity.drop(store, spike_id)
+    assert dropped
+    kept = []
+    for n in range(30):                                     # 30 more sessions, two new questions each
+        first, second = session(f"Session {n + 2}.")
+        assert curiosity.drop(store, second)                # one dropped, one left open, every time
+        kept.append(first)
+    agent.delete_session(store.get("questions", kept[0])["session_id"])   # and an unrelated session deleted
+
+    assert session("The loss spiked again.") == []          # neither wording comes back...
+    reasons = [r[0] for r in store.db.execute("SELECT reason FROM log WHERE kind='rejected question'")]
+    assert reasons == [f"too close to question #{dropped} (0.92 similar by hash-256)",    # ...each one is
+                       f"too close to question #{dropped} (1.00 similar by hash-256)"]    # the dropped one's twin
+    assert [q["status"] for q in store.history("questions", spike_id)] == ["open", "dropped"]
+    assert store.latest("questions", spike_id)["id"] == dropped                     # no version since the drop
+    # The stretch was real: over a year, the open queue overflowing again and again, a session gone.
+    assert store.clock() - start > timedelta(days=365)
+    statuses = [q["status"] for q in store.current("questions")]
+    assert statuses.count("expired") >= 10 and "removed" in statuses

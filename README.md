@@ -59,8 +59,10 @@ Run every command from inside this folder.
    python -m pytest
    ```
    On Windows, two tests that check Linux and macOS file modes and time zones are skipped.
-3. **Try it with the fake model first.** It needs no key and downloads nothing. The "model" is three rules
-   (in `models.py`, `demo_brain`): a message starting `remember:` becomes a belief; a message ending in `?`
+3. **Try it with the fake model first.** It needs no key and downloads nothing. The "model" is four rules
+   (in `models.py`, `demo_brain`): a message starting `remember:` becomes a belief, always at confidence 0.60
+   (the demo never changes it; a real model sets its own); a second `remember:` sharing at least half its words
+   with a current belief replaces it, so `beliefs history` shows both versions; a message ending in `?`
    gets "I'm not sure about that yet", which curiosity notices when the session ends.
    <!-- tests/test_cli.py runs every line of the next block -->
    ```

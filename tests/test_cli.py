@@ -40,7 +40,8 @@ def test_every_command(cli, capsys, monkeypatch, tmp_path):
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     assert cli("chat") == 0
     assert "agent> You said: why\nSession ended; curiosity queued 0 question(s)." in out()
-    assert cli("intentions") == 0 and out() == "#1  active  Write the methods  (current)\n"
+    assert cli("intentions") == 0 and out() == ("#1  active  Write the methods  (current)\n"
+                                                 "      (words copied from desire #3, which you wrote)\n")
     # beliefs and their history
     assert cli("beliefs") == 0 and out() == "#1  0.60  the sample is 12 rats  (evidence: turns 1)\n"
     store = Store(str(tmp_path / "agent.db"), Clock())     # a second version, as a model would propose
@@ -270,10 +271,59 @@ def test_log_beliefs_ok_drop_and_intentions_reopen_from_the_command_line(cli, ca
     assert "intention #2 marked done" in out and "1 proposed change(s) rejected (see: log)" in out
     assert cli("log") == 0 and "rejected belief: evidence [999] is not a turn" in capsys.readouterr().out
     assert cli("intentions", "reopen", "2") == 0 and "active again" in capsys.readouterr().out
-    assert cli("intentions") == 0 and capsys.readouterr().out == "#3  active  Replicate figure 3  (current)\n"
+    assert cli("intentions") == 0 and capsys.readouterr().out == (
+        "#3  active  Replicate figure 3  (current)\n      (words copied from desire #1, which you wrote)\n")
     store = Store(str(tmp_path / "agent.db"), Clock())
     store.append("beliefs", {"text": "the plot matches", "confidence": 0.6, "evidence": "[1]", "flag": "review"})
     assert cli("beliefs", "ok", "1") == 0 and cli("beliefs") == 0
     assert capsys.readouterr().out.splitlines()[-1] == "#2  0.60  the plot matches  (evidence: turns 1)  supersedes #1"
     assert cli("beliefs", "drop", "2") == 0 and cli("beliefs") == 0
     assert capsys.readouterr().out.endswith("dropped; its history stays.\n")
+
+
+# --- Draft fixes from Q (24 Nov 2026) -----------------------------------------------------------------
+
+def test_a_second_remember_on_the_same_subject_replaces_the_first_in_the_demo(cli, capsys):
+    assert cli("chat", "remember: my experiment uses 40 mice") == 0
+    assert cli("chat", "remember: my experiment uses 50 mice, not 40") == 0
+    assert "(replaces #1)" in capsys.readouterr().out
+    assert cli("beliefs") == 0
+    shown = capsys.readouterr().out
+    assert shown.count("\n") == 1 and "50 mice" in shown and "supersedes #1" in shown
+    assert cli("beliefs", "history", "1") == 0 and capsys.readouterr().out.count("\n") == 2
+
+
+def test_an_unrelated_remember_does_not_replace_a_belief_in_the_demo(cli, capsys):
+    assert cli("chat", "remember: my experiment uses 40 mice") == 0
+    assert cli("chat", "remember: the lab closes on Fridays") == 0
+    assert "replaces" not in capsys.readouterr().out
+    assert cli("beliefs") == 0 and capsys.readouterr().out.count("\n") == 2
+
+
+def test_beliefs_ok_on_an_unflagged_belief_makes_no_new_version(cli, capsys):
+    assert cli("chat", "remember: the sample is 12 rats") == 0 and cli("beliefs", "ok", "1") == 0
+    assert "nothing changed" in capsys.readouterr().out
+    assert cli("beliefs", "history", "1") == 0 and capsys.readouterr().out.count("\n") == 1
+
+
+def test_adopting_a_question_that_repeats_a_desire_says_so_and_still_adopts(cli, capsys):
+    assert cli("desire", "add", "Find out why the mice lose weight") == 0
+    assert cli("chat", "why do the mice lose weight?") == 0 and cli("session", "end") == 0
+    capsys.readouterr()
+    assert cli("curious", "adopt", "1") == 0
+    out = capsys.readouterr().out
+    assert "Adopted as desire #2" in out and "desire #1 already says nearly the same" in out
+
+
+def test_a_different_desire_gets_no_duplicate_note(cli, capsys):
+    assert cli("desire", "add", "Replicate figure 3") == 0
+    assert cli("desire", "add", "Write the methods section") == 0
+    assert "already says" not in capsys.readouterr().out
+
+
+def test_an_intention_says_whether_its_words_were_yours_or_the_agents_question(cli, capsys):
+    assert cli("chat", "why do the mice lose weight?") == 0 and cli("session", "end") == 0
+    assert cli("curious", "adopt", "1") == 0 and cli("chat", "ok") == 0
+    capsys.readouterr()
+    assert cli("intentions") == 0
+    assert "adopted from a question the agent raised in turn" in capsys.readouterr().out

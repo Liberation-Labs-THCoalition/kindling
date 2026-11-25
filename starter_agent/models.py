@@ -43,9 +43,29 @@ class FakeModel:
         return self.fn(messages) if self.fn else self.replies.pop(0)
 
 
+def handed_beliefs(prompt):
+    """The (id, text) of each current belief the demo was handed (the block between the two headings)."""
+    block = prompt.partition("YOUR CURRENT BELIEFS:")[2].partition("YOUR CURRENT INTENTION:")[0]
+    return [(int(i), t) for i, t in re.findall(r"^#(\d+) \(confidence [0-9.]+[^)]*\): (.*)$", block, re.M)]
+
+
+def same_subject(beliefs, text):
+    """The id of the newest current belief sharing at least half the words of the shorter text, else None.
+    A crude rule, on purpose: it is only here so the demo can show a belief being replaced."""
+    words = lambda s: set(re.findall(r"[a-z]+", s.lower()))
+    mine = words(text)
+    for belief_id, old in reversed(beliefs):
+        theirs = words(old)
+        if mine and theirs and len(mine & theirs) * 2 >= min(len(mine), len(theirs)):
+            return belief_id
+    return None
+
+
 def demo_brain(messages):
-    """The no-key demo: a 'model' made of three rules, so you can watch every part work.
-    - a message starting "remember:" becomes a belief, citing your turn as its evidence;
+    """The no-key demo: a 'model' made of four rules, so you can watch every part work.
+    - a message starting "remember:" becomes a belief, citing your turn as its evidence, with a fixed
+      confidence of 0.60 (the demo never raises or lowers it; a real model sets its own);
+    - a second "remember:" sharing at least half its words with a current belief replaces that belief;
     - a message ending in "?" gets "I'm not sure about that yet", which curiosity will notice;
     - at the end of a session, curiosity quotes that phrase back as an open question."""
     system, prompt = messages[0]["content"], messages[-1]["content"]
@@ -63,7 +83,12 @@ def demo_brain(messages):
         reply += f" (I recalled session {', '.join(recalled)}.)"
     beliefs = []
     if said.lower().startswith("remember:"):
-        beliefs.append({"text": said[len("remember:"):].strip(), "confidence": 0.6, "evidence": [int(turn)]})
+        text = said[len("remember:"):].strip()
+        belief = {"text": text, "confidence": 0.6, "evidence": [int(turn)]}
+        old = same_subject(handed_beliefs(prompt), text)
+        if old is not None:
+            belief["supersedes"] = old
+        beliefs.append(belief)
     return reply + "\n```json\n" + json.dumps({"beliefs": beliefs, "intention_done": []}) + "\n```"
 
 
@@ -160,8 +185,12 @@ def compare_count(server, messages, counted, cuts=True):
         return
     said = f"{server} counted {counted:,} prompt tokens; Kindling estimated {guessed:,}"
     if counted > guessed:
-        print(f"Note: {said}, over a quarter more. The estimate undercounts your text, so the length check may "
-              "let through a prompt too long for the window.", file=sys.stderr)
+        # A server that refuses a too-long prompt (cuts=False: Anthropic) can't cut one in silence.
+        risk = ("The estimate undercounts your text, so the length check may let through a prompt too long for "
+                "the window." if cuts else
+                "The estimate undercounts your text, but this server refuses a prompt that is too long rather "
+                "than cutting it, so nothing is lost in silence.")
+        print(f"Note: {said}, over a quarter more. {risk}", file=sys.stderr)
         return
     COUNTS.append(f"{said}, over a quarter fewer")
     if RISKS and cuts:

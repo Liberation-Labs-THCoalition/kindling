@@ -364,7 +364,11 @@ def test_a_count_far_over_the_estimate_is_printed_and_one_far_under_only_logged(
         assert models.take_counts() == ([kept_text] if kept else []), counted
         if printed:
             assert f"counted {counted:,} prompt tokens; Kindling estimated 1,000, over a quarter more" in err
-            assert "the length check may let through a prompt too long for the window" in err
+            if name == "anthropic":      # it refuses a too-long prompt and never cuts one: say nothing is lost
+                assert "refuses a prompt that is too long rather than cutting it" in err
+                assert "may let through" not in err
+            else:
+                assert "the length check may let through a prompt too long for the window" in err
         assert "mean the prompt was cut" not in err and "not a cut" not in err
 
 

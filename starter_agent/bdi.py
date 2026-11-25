@@ -12,6 +12,7 @@ Kintsugi's BDI cut to the smallest version that runs; Kintsugi's design began in
   done intention (`intentions reopen`). Every change the model's block makes is shown to you after the reply.
 """
 import json
+import re
 
 from .models import one_line
 
@@ -45,6 +46,17 @@ def live_desires(store):
 
 def next_rank(store):
     return max([d["rank"] for d in live_desires(store)], default=0) + 1
+
+
+def similar_desire(store, text):
+    """The live desire sharing at least 60% of its words with `text` (the smaller set), else None."""
+    words = lambda s: set(re.findall(r"[a-z0-9]+", s.lower()))
+    mine = words(text)
+    for desire in live_desires(store):
+        theirs = words(desire["text"])
+        if mine and theirs and len(mine & theirs) * 10 >= 6 * min(len(mine), len(theirs)):
+            return desire
+    return None
 
 
 def add_desire(store, text, rank=None, source="student", question_id=None, source_turn=None):
@@ -94,6 +106,8 @@ def review_belief(store, belief_id, flag):
     latest = store.latest("beliefs", belief_id)
     if latest is None or latest["flag"] in ("removed", "dropped"):
         return None
+    if latest["flag"] == flag:          # `ok` on a belief nothing flagged: no change, so no new version
+        return latest["id"]
     return store.revise("beliefs", latest, flag=flag)
 
 

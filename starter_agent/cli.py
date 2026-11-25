@@ -112,7 +112,12 @@ def cmd_desire(agent, a):
         if not " ".join(a.args).strip():
             print('Say what the agent should want, e.g.: desire add "Replicate figure 3" --rank 1')
             return 1
-        print(f"Desire #{bdi.add_desire(store, ' '.join(a.args), a.rank)} added.")
+        text = " ".join(a.args)
+        twin = bdi.similar_desire(store, text)
+        print(f"Desire #{bdi.add_desire(store, text, a.rank)} added.")
+        if twin:
+            print(f"Note: desire #{twin['id']} already says nearly the same: {twin['text']}  "
+                  f"(to remove one: desire drop ID)")
     elif a.action == "list":
         for d in bdi.live_desires(store):
             print(f"#{d['id']}  rank {d['rank']}  {d['text']}  ({d['source']})")
@@ -136,7 +141,11 @@ def cmd_desire(agent, a):
 def cmd_beliefs(agent, a):
     if a.action in ("ok", "drop"):                     # your word: it stands, or stop using it
         flag = None if a.action == "ok" else "dropped"
+        before = agent.store.latest("beliefs", a.id) if a.id is not None else None
         new = bdi.review_belief(agent.store, a.id, flag) if a.id is not None else None
+        if new is not None and before is not None and new == before["id"]:
+            print(f"Belief #{new} wasn't flagged, so nothing changed (no new version).")
+            return 0
         if new is None:
             print("Give the id of a current belief (see: beliefs).")
             return 1
@@ -155,6 +164,18 @@ def cmd_beliefs(agent, a):
     return 0
 
 
+def where_from(store, intention):
+    """Where an intention's words came from: a copy of the desire it serves, which you wrote or which was
+    adopted from one of the agent's own questions (and the turn that raised it)."""
+    desire = store.latest("desires", intention["serves"])
+    if desire is None:
+        return "(the desire it served is gone)"
+    if desire["source"] == "curiosity":
+        return (f"(words copied from desire #{desire['id']}, adopted from a question the agent raised "
+                f"in turn {desire['source_turn']})")
+    return f"(words copied from desire #{desire['id']}, which you wrote)"
+
+
 def cmd_intentions(agent, a):
     """Read-only, like every list: no model call, nothing written. `intentions reopen ID` is your word."""
     if a.action == "reopen":
@@ -167,7 +188,7 @@ def cmd_intentions(agent, a):
     for i in agent.store.current("intentions", "flag IS NOT 'removed'"):
         if i["serves"] in live:                         # not one whose desire you dropped
             mark = "  (current)" if current and i["id"] == current["id"] else ""
-            print(f"#{i['id']}  {i['status']}  {i['text']}{mark}")
+            print(f"#{i['id']}  {i['status']}  {i['text']}{mark}\n      {where_from(agent.store, i)}")
     if desire is not None and current is None:
         print(f"(new)  active  {desire['text']}  (current; your next chat turn writes it down)")
     return 0
@@ -185,6 +206,8 @@ def cmd_curious(agent, a):
                   "open; curiosity reads it once it ends.\nTo end it now: python -m starter_agent session end")
         return 0
     act = curiosity.drop if a.action == "drop" else (lambda s, i: curiosity.adopt(s, i, a.rank))
+    question = store.latest("questions", a.id) if a.id is not None else None
+    twin = bdi.similar_desire(store, question["text"]) if a.action == "adopt" and question else None
     result = act(store, a.id) if a.id is not None else None
     if result is None:
         print("Give the id of an open question (see: curious list).")
@@ -192,6 +215,9 @@ def cmd_curious(agent, a):
     print("Dropped. It stays in the file, and a new question in nearly the same words won't be queued."
           if a.action == "drop"
           else f"Adopted as desire #{result}.")
+    if twin and result is not None:
+        print(f"Note: desire #{twin['id']} already says nearly the same: {twin['text']}  "
+              f"(to remove one: desire drop ID)")
     return 0
 
 

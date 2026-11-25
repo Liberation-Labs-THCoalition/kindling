@@ -76,7 +76,8 @@ def test_the_commands_that_list_things_never_call_the_model_or_write(tmp_path, c
     assert list(Store(str(tmp_path / "agent.db"), clock).db.iterdump()) == before   # no row written
     run("chat", "hello")                           # the next chat ends the idle session and writes it down
     capsys.readouterr()
-    assert run("intentions") == 0 and capsys.readouterr().out == "#2  active  Replicate figure 3  (current)\n"
+    assert run("intentions") == 0 and capsys.readouterr().out == (
+        "#2  active  Replicate figure 3  (current)\n      (words copied from desire #3, which you wrote)\n")
 
 
 def test_default_settings_need_nothing_installed():
